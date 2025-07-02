@@ -8,20 +8,25 @@ from dify_plugin import Endpoint
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 
-# ── ★ 1 日 TTL の簡易キャッシュ ─────────────
-_TTL = 60 * 60 * 24           # 秒
+# Constants
+CACHE_TTL_SECONDS = 60 * 60 * 24  # 24 hours
+BUTTON_PATTERN = r'<button\s+data-message="([^"]*)"[^>]*>([^<]*)</button>'
+DEFAULT_ERROR_MESSAGE = "Failed to get response"
+
+# Conversation cache with 24-hour TTL
 _CONV_CACHE: Dict[str, Tuple[str, float]] = {}
 
 def _get_conv(t_ts: str) -> Optional[str]:
+    """Get conversation ID from cache if not expired."""
     rec = _CONV_CACHE.get(t_ts)
-    if rec and (time.time() - rec[1] < _TTL):
+    if rec and (time.time() - rec[1] < CACHE_TTL_SECONDS):
         return rec[0]
-    _CONV_CACHE.pop(t_ts, None)           # 期限切れは削除
+    _CONV_CACHE.pop(t_ts, None)  # Remove expired entry
     return None
 
-def _set_conv(t_ts: str, conv_id: str):
+def _set_conv(t_ts: str, conv_id: str) -> None:
+    """Store conversation ID with timestamp."""
     _CONV_CACHE[t_ts] = (conv_id, time.time())
-# ──────────────────────────────────────────
 
 class SlackEndpoint(Endpoint):
     def _invoke(self, r: Request, values: Mapping, settings: Mapping) -> Response:
@@ -41,7 +46,7 @@ class SlackEndpoint(Endpoint):
         else:
             data = r.get_json(silent=True) or {}
 
-        # URL 検証を最優先で処理
+        # Handle URL verification as top priority
         if data.get("type") == "url_verification":
             return Response(
                 response=data.get("challenge", ""),
@@ -56,11 +61,11 @@ class SlackEndpoint(Endpoint):
         )):
             return Response(status=200, response="ok")
 
-        # ボタンクリックイベント処理
+        # Handle button click events
         if data.get("type") == "block_actions":
             return self._handle_button_click(data, settings)
 
-        # 興味のないイベントは早期終了
+        # Early return for uninteresting events
         if data.get("type") != "event_callback":
             return Response(status=200, response="ok")
 
@@ -71,34 +76,34 @@ class SlackEndpoint(Endpoint):
         return self._handle_app_mention(event, settings)
 
     def _handle_app_mention(self, event: Dict[str, Any], settings: Mapping) -> Response:
-        """アプリメンション処理"""
+        """Handle app mention events."""
         try:
-            # ------- メッセージ抽出 -------
+            # Extract message from mention
             raw = event.get("text", "")
             if not raw.startswith("<@"):
                 return Response(status=200, response="ok")
 
             message = raw.split("> ", 1)[1] if "> " in raw else raw
             channel = event.get("channel", "")
-            thread_ts = event.get("thread_ts") or event["ts"]     # ★ 共通 ID
+            thread_ts = event.get("thread_ts") or event["ts"]  # Use as conversation ID
 
             client = WebClient(token=settings.get("bot_token"))
 
-            # ------- Dify 呼び出し -------
+            # Invoke Dify chat
             resp = self.session.app.chat.invoke(
                 app_id=settings["app"]["app_id"],
                 query=message,
                 inputs={},
                 response_mode="blocking",
-                conversation_id=_get_conv(thread_ts),        # ★ 既存 conv なら継続
+                conversation_id=_get_conv(thread_ts),  # Continue existing conversation
             )
 
-            if new_id := resp.get("conversation_id"):        # ★ 初回なら保存
+            if new_id := resp.get("conversation_id"):  # Save new conversation ID
                 _set_conv(thread_ts, new_id)
 
-            answer = resp.get("answer", "（回答が取得できませんでした）")
+            answer = resp.get("answer", DEFAULT_ERROR_MESSAGE)
             
-            # HTMLボタンをSlack Block Kitに変換
+            # Convert HTML buttons to Slack Block Kit
             blocks = self._convert_html_to_slack_blocks(answer)
             
             message_params = {
@@ -113,20 +118,20 @@ class SlackEndpoint(Endpoint):
             client.chat_postMessage(**message_params)
 
         except SlackApiError as e:
-            print(f"[ERROR] Slack API error: {e.response['error']}")
-        except Exception as e:
+            print(f"[ERROR] Slack API error: {e.response.get('error', 'Unknown error')}")
+        except Exception:
             print(f"[ERROR] App mention handler failed: {traceback.format_exc()}")
 
         return Response(status=200, response="ok")
 
     def _handle_button_click(self, data: Dict[str, Any], settings: Mapping) -> Response:
-        """ボタンクリック処理"""
+        """Handle button click interactions."""
         try:
             action = data.get("actions", [{}])[0]
             button_text = action.get("value", "")
             channel = data.get("channel", {}).get("id", "")
             
-            # 元のメッセージ情報を取得してスレッド処理
+            # Get original message info for threading
             original_message = data.get("message", {})
             thread_ts = original_message.get("ts", "")
             original_user = original_message.get("user", "")
@@ -136,25 +141,25 @@ class SlackEndpoint(Endpoint):
 
             client = WebClient(token=settings.get("bot_token"))
             
-            # ------- Dify 呼び出し -------
+            # Invoke Dify chat
             resp = self.session.app.chat.invoke(
                 app_id=settings["app"]["app_id"],
                 query=button_text,
                 inputs={},
                 response_mode="blocking",
-                conversation_id=_get_conv(thread_ts),        # ★ 既存 conv なら継続
+                conversation_id=_get_conv(thread_ts),  # Continue existing conversation
             )
 
-            if new_id := resp.get("conversation_id"):        # ★ 初回なら保存
+            if new_id := resp.get("conversation_id"):  # Save new conversation ID
                 _set_conv(thread_ts, new_id)
 
-            answer = resp.get("answer", "（回答が取得できませんでした）")
+            answer = resp.get("answer", DEFAULT_ERROR_MESSAGE)
             
-            # 元のユーザーへのメンション追加
+            # Add mention to original user
             mention_text = f"<@{original_user}> " if original_user else ""
             final_answer = mention_text + answer
             
-            # HTMLボタンをSlack Block Kitに変換
+            # Convert HTML buttons to Slack Block Kit
             blocks = self._convert_html_to_slack_blocks(final_answer)
             
             message_params = {
@@ -169,26 +174,25 @@ class SlackEndpoint(Endpoint):
             client.chat_postMessage(**message_params)
 
         except SlackApiError as e:
-            print(f"[ERROR] Slack API error: {e.response['error']}")
-        except Exception as e:
+            print(f"[ERROR] Slack API error: {e.response.get('error', 'Unknown error')}")
+        except Exception:
             print(f"[ERROR] Button click handler failed: {traceback.format_exc()}")
 
         return Response(status=200, response="ok")
 
     def _convert_html_to_slack_blocks(self, text: str) -> List[Dict[str, Any]]:
-        """HTMLボタンをSlack Block Kit形式に変換"""
-        button_pattern = r'<button\s+data-message="([^"]*)"[^>]*>([^<]*)</button>'
-        buttons = re.findall(button_pattern, text)
+        """Convert HTML buttons to Slack Block Kit format."""
+        buttons = re.findall(BUTTON_PATTERN, text)
         
         if not buttons:
             return []
         
-        # ボタンHTMLを除去したテキスト
-        clean_text = re.sub(button_pattern, '', text).strip()
+        # Text with button HTML removed
+        clean_text = re.sub(BUTTON_PATTERN, '', text).strip()
         
         blocks = []
         
-        # テキストブロック追加
+        # Add text block
         if clean_text:
             blocks.append({
                 "type": "section",
@@ -198,7 +202,7 @@ class SlackEndpoint(Endpoint):
                 }
             })
         
-        # ボタンブロック追加
+        # Add button block
         if buttons:
             button_elements = []
             for i, (data_message, button_text) in enumerate(buttons):
@@ -220,6 +224,5 @@ class SlackEndpoint(Endpoint):
         return blocks
 
     def _strip_html_buttons(self, text: str) -> str:
-        """HTMLボタンタグを除去"""
-        button_pattern = r'<button\s+data-message="[^"]*"[^>]*>[^<]*</button>'
-        return re.sub(button_pattern, '', text).strip()
+        """Remove HTML button tags from text."""
+        return re.sub(BUTTON_PATTERN, '', text).strip()

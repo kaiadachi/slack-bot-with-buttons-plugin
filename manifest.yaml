@@ -1,6 +1,6 @@
 version: 1.0.0
 type: plugin
-author: langgenius
+author: kaiadachi
 name: slack-bot-with-buttons
 label:
   en_US: Slack Bot with Buttons
