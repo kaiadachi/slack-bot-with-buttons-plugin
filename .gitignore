@@ -49,3 +49,6 @@ wheels/
 
 # Claude
 .claude/
+
+# IDE files
+*.iml

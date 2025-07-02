@@ -40,9 +40,9 @@ class SlackEndpoint(Endpoint):
                 try:
                     data = json.loads(form_data['payload'])
                 except json.JSONDecodeError:
-                    data = {}
+                    data = form_data
             else:
-                data = {}
+                data = form_data
         else:
             data = r.get_json(silent=True) or {}
 

@@ -1,0 +1,17 @@
+.env
+.vscode/
+.idea/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.DS_Store
+*.iml
+.git/
+.gitignore
+*.difypkg
+.claude/
+dify
+dify-plugin-darwin-arm64
