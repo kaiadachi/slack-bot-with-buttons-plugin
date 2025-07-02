@@ -13,6 +13,8 @@ An enhanced Slack Bot plugin for Dify that builds upon the official slack_bot wi
 3. **Thread-based Replies** - All responses are properly threaded for better conversation organization
 
 This plugin enables rich, interactive conversational experiences between Slack and Dify applications (Chatflow/Chatbot/Agent).
+<img width="1063" alt="スクリーンショット 2025-07-02 22 45 58" src="https://github.com/user-attachments/assets/c1824e1e-e641-4c96-8434-31e7e0c853a3" />
+
 
 ## Features
 
